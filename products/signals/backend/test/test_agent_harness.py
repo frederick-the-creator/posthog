@@ -180,6 +180,11 @@ class TestPromptBuilder(BaseTest):
         assert "llma-skill-file-get" in prompt
         assert "watch for spikes" not in prompt
         assert "refs/playbook.md" not in prompt
+        # Second bootstrap step orients the agent on the project via the
+        # project-profile harness tool, eliminating the discovery-burn the
+        # scout would otherwise pay on a fresh team.
+        assert "Then: orient on this project" in prompt
+        assert "signals-agent-project-profile-get" in prompt
         # The base prompt teaches the agent to call the harness MCP tools by name.
         assert "signals-agent-runs-findings-create" in prompt
         assert "signals-agent-memory-list" in prompt
