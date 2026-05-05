@@ -61,8 +61,8 @@ def _create_skill(team: Team, name: str) -> LLMSkill:
 
 
 @pytest.fixture(autouse=True)
-def _stub_canonical_seed(request):
-    """Stub `seed_canonical_skills` to a no-op for every test in this module.
+def _stub_canonical_sync(request):
+    """Stub `sync_canonical_skills` to a no-op for every test in this module.
 
     These tests assert on coordinator sampling logic using hand-authored skills as fixtures.
     The real sync would write the canonical fleet onto every team on first encounter, which
@@ -71,13 +71,13 @@ def _stub_canonical_seed(request):
     care that the coordinator calls it (and tolerates failures).
 
     Tests that exercise the real sync (e.g. asserting brand-new teams get seeded) opt out
-    by marking themselves `@pytest.mark.real_canonical_seed`.
+    by marking themselves `@pytest.mark.real_canonical_sync`.
     """
-    if request.node.get_closest_marker("real_canonical_seed"):
+    if request.node.get_closest_marker("real_canonical_sync"):
         yield
         return
     with patch(
-        "products.signals.backend.temporal.agentic.agent_coordinator.seed_canonical_skills",
+        "products.signals.backend.temporal.agentic.agent_coordinator.sync_canonical_skills",
         return_value=None,
     ):
         yield
@@ -334,7 +334,7 @@ async def test_planned_runs_one_per_team_sorted_by_team_id(ateam, aother_team):
 
 @pytest.mark.asyncio
 @pytest.mark.django_db
-@pytest.mark.real_canonical_seed
+@pytest.mark.real_canonical_sync
 async def test_lazy_seeds_canonical_skills_for_brand_new_team(ateam):
     # An enabled config on a brand-new team (no signals-agent-* skills yet) should
     # still produce planned runs: the coordinator lazy-seeds the canonical set on
@@ -379,7 +379,7 @@ async def test_lazy_seed_failure_does_not_abort_tick(ateam, aother_team):
     await database_sync_to_async(_create_skill)(ateam, "signals-agent-existing")
 
     with patch(
-        "products.signals.backend.temporal.agentic.agent_coordinator.seed_canonical_skills",
+        "products.signals.backend.temporal.agentic.agent_coordinator.sync_canonical_skills",
         side_effect=RuntimeError("simulated seed failure"),
     ):
         env = ActivityEnvironment()

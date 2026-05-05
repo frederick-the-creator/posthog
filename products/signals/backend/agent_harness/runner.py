@@ -11,8 +11,8 @@ from django.utils import timezone
 from posthog.models.team.team import Team
 from posthog.sync import database_sync_to_async
 
-from products.signals.backend.agent_harness.lazy_seed import seed_canonical_skills
-from products.signals.backend.agent_harness.limits import RunLimits, resolve_limits
+from products.signals.backend.agent_harness.lazy_seed import sync_canonical_skills
+from products.signals.backend.agent_harness.limits import DEFAULT_MAX_RUNTIME_S, RunLimits, resolve_limits
 from products.signals.backend.agent_harness.prompt import SignalAgentRunSummary, build_run_prompt
 from products.signals.backend.agent_harness.skill_loader import LoadedSkill, load_skill_for_run
 from products.signals.backend.models import SignalAgentConfig, SignalAgentRun
@@ -87,14 +87,15 @@ async def arun_signals_agent(
     """Async core. Safe to call from inside a running event loop (Temporal activity)."""
     team = await database_sync_to_async(_get_team, thread_sensitive=False)(team_id)
     config = await database_sync_to_async(_resolve_config, thread_sensitive=False)(team)
-    # Lazy-seed canonical signals-agent-* skills if the team has none yet, so the run
-    # has something to load. Failures here should not crash the run — we log and continue
-    # with whatever skills the team already has.
+    # Sync canonical signals-agent-* skills before we resolve the skill the run asked for.
+    # Creates rows for newly-shipped specialists, updates harness-seeded rows the team
+    # hasn't edited, and leaves forked / tombstoned rows alone. Failures here should not
+    # crash the run — we log and continue with whatever skills the team already has.
     try:
-        await database_sync_to_async(seed_canonical_skills, thread_sensitive=False)(team)
+        await database_sync_to_async(sync_canonical_skills, thread_sensitive=False)(team)
     except Exception:
         logger.exception(
-            "signals_agent: canonical skill seed failed; continuing with existing team skills",
+            "signals_agent: canonical skill sync failed; continuing with existing team skills",
             extra={"team_id": team_id},
         )
     skill = await database_sync_to_async(load_skill_for_run, thread_sensitive=False)(

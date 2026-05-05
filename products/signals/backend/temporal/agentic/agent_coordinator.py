@@ -15,7 +15,7 @@ from posthog.sync import database_sync_to_async
 from posthog.temporal.common.heartbeat import Heartbeater
 
 from products.llm_analytics.backend.models.skills import LLMSkill
-from products.signals.backend.agent_harness.lazy_seed import seed_canonical_skills
+from products.signals.backend.agent_harness.lazy_seed import sync_canonical_skills
 from products.signals.backend.agent_harness.skill_loader import SIGNALS_AGENT_SKILL_PREFIX
 from products.signals.backend.models import SignalAgentConfig
 from products.signals.backend.temporal.agentic.agent_scheduler import RunSignalsAgentInput, RunSignalsAgentWorkflow
@@ -92,17 +92,19 @@ def _collect_planned_runs() -> list[PlannedRun]:
     for config in configs:
         team = config.team
         team_id = team.id
-        # Lazy-seed canonical signals-agent-* skills before we resolve the skill list.
+        # Sync canonical signals-agent-* skills before we resolve the skill list.
         # Without this, a brand-new team with `enabled_skill_names=None` and zero
         # LLMSkill rows would produce an empty planned set, no child runs would fan
-        # out, and the runner-level lazy seed would never be reached — the cadence
-        # path would silently never start. No-op when the team already has any
-        # signals-agent-* row. Failures don't abort the tick: log and continue.
+        # out, and the runner-level sync would never be reached — the cadence path
+        # would silently never start. The sync also propagates updates to canonical
+        # content for any harness-seeded row the team hasn't edited, so a merged
+        # SKILL.md change rolls out within one coordinator tick. Failures don't
+        # abort the tick: log and continue with whatever skills the team has.
         try:
-            seed_canonical_skills(team)
+            sync_canonical_skills(team)
         except Exception:
             logger.exception(
-                "signals_agent coordinator: canonical skill seed failed for team; continuing",
+                "signals_agent coordinator: canonical skill sync failed for team; continuing",
                 team_id=team_id,
             )
         skill_names = _resolve_skill_names_for_config(config, team_id=team_id)
