@@ -70,9 +70,9 @@ class SignalReportAdmin(admin.ModelAdmin):
 
 
 class SignalAgentConfigAdmin(admin.ModelAdmin):
-    list_display = ("id", "team_link", "enabled", "shadow_mode", "created_at", "updated_at")
+    list_display = ("id", "team_link", "enabled", "shadow_mode", "runs_per_tick", "created_at", "updated_at")
     list_display_links = ("id",)
-    list_filter = ("enabled", "shadow_mode")
+    list_filter = ("enabled", "shadow_mode", "runs_per_tick")
     search_fields = ("id", "team__name", "team__organization__name")
     raw_id_fields = ("team", "created_by")
     readonly_fields = ("id", "created_at", "updated_at")
