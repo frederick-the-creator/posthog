@@ -115,8 +115,7 @@ class SignalAgentRunAdmin(admin.ModelAdmin):
         "summary",
         "findings",
         "hypotheses_considered",
-        "tool_call_log",
-        "budget_used",
+        "run_metrics",
         "metadata",
     )
     list_select_related = ("team", "team__organization", "agent_config")
