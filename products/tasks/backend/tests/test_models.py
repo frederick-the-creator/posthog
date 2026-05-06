@@ -255,6 +255,33 @@ class TestTask(TestCase):
         self.assertIn("does not have a GitHub integration", str(cm.exception))
         mock_execute_workflow.assert_not_called()
 
+    @patch("products.tasks.backend.temporal.client.execute_task_processing_workflow")
+    def test_create_and_run_skips_github_integration_when_no_repository(self, mock_execute_workflow):
+        """Tasks without a repository (e.g. cadence agent runs that don't clone or push)
+        must NOT attach the team's GitHub integration. The downstream
+        `prepare_sandbox_for_repository` activity tries to fetch a fresh installation
+        token whenever `github_integration_id` is set, and any token-refresh failure
+        (expired install, rotated key, removed install) would break tasks that have
+        nothing to do with GitHub."""
+        user = User.objects.create(email="test@test.com")
+        # A healthy GitHub integration exists on the team but should not bleed into a
+        # repo-less task.
+        Integration.objects.create(team=self.team, kind="github", config={})
+
+        task = Task.create_and_run(
+            team=self.team,
+            title="No-repo task",
+            description="No repo work",
+            origin_product=Task.OriginProduct.USER_CREATED,
+            user_id=user.id,
+            repository=None,
+        )
+
+        self.assertIsNone(task.github_integration)
+        self.assertIsNone(task.github_integration_id)
+        mock_execute_workflow.assert_called_once()
+
+
     @parameterized.expand(
         [
             ("posthog-repo",),

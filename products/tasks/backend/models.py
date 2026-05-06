@@ -299,7 +299,16 @@ class Task(DeletedMetaFields, models.Model):
             user_github_integration_is_usable,
         )
 
-        github_integration = Integration.objects.filter(team=team, kind="github").first()
+        # Only attach the team's GitHub integration when this task actually needs a
+        # repo. Repo-less tasks (the cadence path of the signals agent, ad-hoc no-repo
+        # investigations) do not clone or push and never use the token, but the
+        # downstream `prepare_sandbox_for_repository` activity will still try to fetch
+        # a fresh installation token if `github_integration_id` is set on the row.
+        # Any token-refresh failure (expired install, rotated key, removed install,
+        # network glitch) would then break tasks that have nothing to do with GitHub.
+        # The repo-required guard further down still raises if a repo *is* requested
+        # but no integration exists.
+        github_integration = Integration.objects.filter(team=team, kind="github").first() if repository else None
         github_user_integration = None
         task_stub = Task(
             team=team,
