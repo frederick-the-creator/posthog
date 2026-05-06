@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from django.db import IntegrityError
 from django.utils import timezone
 
 from posthog.models.team.team import Team
@@ -110,9 +111,13 @@ async def arun_signals_agent(
     # coordinator tick from spawning a fresh run.
     await database_sync_to_async(_self_heal_stale_runs, thread_sensitive=False)(team_id, config.id)
 
-    # Skip-if-running guard. Best-effort — there is a TOCTOU window between this check
-    # and the row insert below; we accept that until a claim/lease primitive lands.
-    if await database_sync_to_async(_has_running_run, thread_sensitive=False)(team_id, config.id):
+    # Skip-if-running guard, keyed on (team, skill_name). Different skills for the
+    # same team are allowed to run concurrently — `runs_per_tick > 1` relies on this.
+    # The check still has a TOCTOU window with the insert below, but the partial
+    # unique index `signal_agent_run_one_running_per_team_skill` makes the DB the
+    # source of truth: the second INSERT in a race fails with IntegrityError, which
+    # we translate into the same skip path.
+    if await database_sync_to_async(_has_running_run, thread_sensitive=False)(team_id, config.id, skill.name):
         logger.info(
             "signals_agent: skipping trigger, prior run still RUNNING",
             extra={"team_id": team_id, "skill_name": skill.name},
@@ -127,9 +132,28 @@ async def arun_signals_agent(
             skip_reason="prior run still in RUNNING status",
         )
 
-    run = await database_sync_to_async(_create_run_row, thread_sensitive=False)(
-        team=team, config=config, skill=skill, limits=limits
-    )
+    try:
+        run = await database_sync_to_async(_create_run_row, thread_sensitive=False)(
+            team=team, config=config, skill=skill, limits=limits
+        )
+    except IntegrityError:
+        # Lost the TOCTOU race: another child for the same (team, skill) inserted its
+        # RUNNING row between our `_has_running_run` check and this INSERT. Translate
+        # to a clean skip so the dispatcher records this as a skipped run rather than
+        # a workflow failure.
+        logger.info(
+            "signals_agent: skipping trigger, lost insert race to concurrent dispatch",
+            extra={"team_id": team_id, "skill_name": skill.name},
+        )
+        return RunResult(
+            run_id=None,
+            status=None,
+            last_message=None,
+            runtime_s=0.0,
+            skill_name=skill.name,
+            skill_version=skill.version,
+            skip_reason="concurrent run for this team+skill already RUNNING",
+        )
     started = time.monotonic()
     try:
         last_message = await _spawn_and_run(
@@ -195,7 +219,7 @@ async def arun_signals_agent(
                 run_id=run.id,
                 exc=exc,
                 runtime_s=runtime_s,
-                budget=budget,
+                limits=limits,
                 skill=skill,
             )
         except Exception:
@@ -288,10 +312,15 @@ def _resolve_config(team: Team) -> SignalAgentConfig:
     return config
 
 
-def _has_running_run(team_id: int, config_id: str) -> bool:
+def _has_running_run(team_id: int, config_id: str, skill_name: str) -> bool:
+    # Locked on (team, skill_name) — different skills for the same team are allowed
+    # to fan out, which is the whole point of `runs_per_tick > 1`. `agent_config_id`
+    # is included to keep the filter selective on the per-team RUNNING-status index;
+    # the partial unique index in the schema enforces the same shape at the DB layer.
     return SignalAgentRun.objects.filter(
         team_id=team_id,
         agent_config_id=config_id,
+        skill_name=skill_name,
         status=SignalAgentRun.Status.RUNNING,
     ).exists()
 
@@ -319,7 +348,7 @@ def _self_heal_stale_runs(team_id: int, config_id: str) -> None:
     ).only("id", "started_at", "metadata")
     now = timezone.now()
     for run in candidates:
-        budget_max_s = ((run.metadata or {}).get("budget", {}) or {}).get("max_runtime_s") or DEFAULT_MAX_RUNTIME_S
+        budget_max_s = ((run.metadata or {}).get("limits", {}) or {}).get("max_runtime_s") or DEFAULT_MAX_RUNTIME_S
         threshold_s = _STALE_RUN_MULTIPLIER * budget_max_s
         age_s = (now - run.started_at).total_seconds()
         if age_s <= threshold_s:

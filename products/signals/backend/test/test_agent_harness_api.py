@@ -20,7 +20,12 @@ def _make_run(team, **overrides) -> SignalAgentRun:
         "agent_config": config,
         "skill_name": "signals-agent-general",
         "skill_version": 1,
-        "status": SignalAgentRun.Status.RUNNING,
+        # Default to a terminal state so multiple fixtures for the same team+skill don't
+        # collide with the partial unique index `signal_agent_run_one_running_per_team_skill`
+        # (only one RUNNING row per team+skill is allowed). Tests that need RUNNING pass
+        # `status=SignalAgentRun.Status.RUNNING` explicitly and are responsible for
+        # using distinct skill names if they create multiple rows.
+        "status": SignalAgentRun.Status.COMPLETED,
         "summary": "investigating checkout 500s",
     }
     defaults.update(overrides)
@@ -130,7 +135,7 @@ class TestAgentHarnessEmitFindingAPI(APIBaseTest):
         return body
 
     def test_emit_finding_in_shadow_mode_persists_without_firing_pipeline(self) -> None:
-        run = _make_run(self.team)
+        run = _make_run(self.team, status=SignalAgentRun.Status.RUNNING)
         # Default config rows are shadow_mode=True per model default.
         with patch("products.signals.backend.api.emit_signal", new_callable=AsyncMock) as mock_emit:
             response = self.client.post(self._findings_url(str(run.id)), data=self._payload(), format="json")
@@ -144,7 +149,7 @@ class TestAgentHarnessEmitFindingAPI(APIBaseTest):
         assert run.findings[0]["emitted"] is False
 
     def test_emit_finding_outside_shadow_mode_calls_emit_signal(self) -> None:
-        run = _make_run(self.team)
+        run = _make_run(self.team, status=SignalAgentRun.Status.RUNNING)
         SignalAgentConfig.objects.filter(team=self.team).update(shadow_mode=False)
         with patch("products.signals.backend.api.emit_signal", new_callable=AsyncMock) as mock_emit:
             response = self.client.post(self._findings_url(str(run.id)), data=self._payload(), format="json")
@@ -157,7 +162,7 @@ class TestAgentHarnessEmitFindingAPI(APIBaseTest):
         assert run.findings[0]["emitted"] is True
 
     def test_emit_finding_idempotent_on_finding_id(self) -> None:
-        run = _make_run(self.team)
+        run = _make_run(self.team, status=SignalAgentRun.Status.RUNNING)
         SignalAgentConfig.objects.filter(team=self.team).update(shadow_mode=False)
         with patch("products.signals.backend.api.emit_signal", new_callable=AsyncMock) as mock_emit:
             first = self.client.post(self._findings_url(str(run.id)), data=self._payload(), format="json")
