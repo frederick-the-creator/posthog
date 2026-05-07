@@ -342,13 +342,13 @@ class TestAgentHarnessMemoryAPI(APIBaseTest):
 class TestAgentHarnessProjectProfileAPI(APIBaseTest):
     """The project profile is the agent's orientation surface — read once at run start.
 
-    There's only one operation (`list` returns the singleton current profile), so the
+    There's only one operation (`current` returns the singleton current profile), so the
     surface is small. These tests cover lazy compute on first call, cache-hit reuse,
     and team isolation.
     """
 
     def _list_url(self) -> str:
-        return f"/api/projects/{self.team.id}/signals/agent/project_profile/"
+        return f"/api/projects/{self.team.id}/signals/agent/project_profile/current/"
 
     def test_lazy_computes_a_profile_when_none_exists(self) -> None:
         assert SignalProjectProfile.objects.filter(team=self.team).count() == 0
