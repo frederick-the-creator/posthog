@@ -147,6 +147,8 @@ export const OAUTH_SCOPES_SUPPORTED = [
     'sharing_configuration:write',
     'signal_agent:read',
     'signal_agent:write',
+    'signal_agent_internal:read',
+    'signal_agent_internal:write',
     'streamlit_app:read',
     'streamlit_app:write',
     'subscription:read',
