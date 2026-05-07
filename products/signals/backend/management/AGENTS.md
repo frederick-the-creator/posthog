@@ -144,12 +144,22 @@ python manage.py sync_signals_agent_skills --team-id 1
 
 # See what would change without writing
 python manage.py sync_signals_agent_skills --all-enabled --dry-run
+
+# Emergency revert — push canonical to every enabled team regardless of rollout flag
+python manage.py sync_signals_agent_skills --all-enabled --force
 ```
 
 Output buckets per team: `created`, `updated`, `diverged` (team-edited rows left alone),
 `tombstoned` (canonical skill deleted on disk), `backfilled` (metadata gaps closed).
 Same function the coordinator and runner call lazily — this command is just the
 impatient path.
+
+**Rollout-flag gate.** By default this command honors the same `signals-agent` feature flag
+the Temporal coordinator uses — a team that is `enabled=True` but flag-gated off is reported
+as `team N: skipped — gated by signals-agent rollout flag` and not synced. Use `--force` for
+emergency reverts (e.g. pushing a fixed canonical to every team regardless of rollout state)
+or for local dev/testing. See `../agent_harness/feature_flags.py` for the flag's contract
+and `../../ARCHITECTURE.md` "Rollout & feature flags" for the full layering.
 
 ## Tips
 

@@ -134,6 +134,7 @@ tools:
             in place and resets its TTL (default 7 days, max 90). Cannot overwrite `human_confirmed` entries — those are
             managed by humans only. Use this to record "already saw it" notes, dedupe keys, validated hypotheses, or
             narrow the scope of future runs.
+        feature_flag: signals-agent
     signals-agent-memory-delete:
         operation: signals_agent_memory_delete
         enabled: true
@@ -147,6 +148,7 @@ tools:
         description: >
             Delete an `agent_inference` memory entry by key. Returns `deleted=false` if no row matched — the call is
             idempotent. Cannot delete `human_confirmed` entries.
+        feature_flag: signals-agent
     signals-agent-memory-list:
         operation: signals_agent_memory_list
         enabled: true
@@ -162,6 +164,7 @@ tools:
             Return `SignalMemory` entries the project has accumulated — known issues, false positives, team steering.
             ILIKE matches on `content`; tags filter via Postgres array overlap (pass repeated `tags=` query params).
             Expired `agent_inference` entries are hidden by default; pass `include_expired=true` for audit/debug.
+        feature_flag: signals-agent
         response:
             include:
                 - key
@@ -191,6 +194,7 @@ tools:
             `inbox-source-configs-list` / `inbox-reports-list` / `read-data-schema` / `activity-log-list`. Distinct from
             `signals-agent-memory-list`: profile is ground truth from authoritative tables; memory is the agent's
             inferred learnings.
+        feature_flag: signals-agent
     signals-agent-runs-findings-create:
         operation: signals_agent_runs_findings_create
         enabled: true
@@ -207,6 +211,7 @@ tools:
             re-firing the pipeline. Honors the team's `shadow_mode` flag: when true, the finding is persisted on the run
             row but the external emit is a no-op. Use `weight` to rank, `confidence` to self-grade, and attach evidence
             citations referencing `error_tracking`, `session_replay`, `logs`, `feature_flags`, etc.
+        feature_flag: signals-agent
     signals-agent-runs-list:
         operation: signals_agent_runs_list
         enabled: true
@@ -223,6 +228,7 @@ tools:
             agent to dedupe its own work — read what other runs already covered before generating new hypotheses. ILIKE
             matches on `summary`; results are capped at 100 (default 20). Optional `since` window narrows to recent runs
             only.
+        feature_flag: signals-agent
         response:
             include:
                 - run_id
@@ -247,6 +253,7 @@ tools:
             Return the full `SignalAgentRun` row including `summary`, `findings`, `hypotheses_considered`,
             `tool_call_log`, and `metadata`. Strictly team-scoped — a UUID belonging to another project returns 404.
             Follow up to a row surfaced by `signals-agent-runs-list` when you need the full payload.
+        feature_flag: signals-agent
     users-signal-autonomy-create:
         operation: users_signal_autonomy_create
         enabled: false

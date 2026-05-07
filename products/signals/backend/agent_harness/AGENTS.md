@@ -68,6 +68,15 @@ management command (see `../management/AGENTS.md`).
   `WORKFLOW_HARD_CEILING_S` (the activity-level ceiling that gates the workflow's
   `start_to_close_timeout`), and `resolve_limits()` which folds per-team
   `SignalAgentConfig.limit_overrides` over the harness defaults.
+- `feature_flags.py`
+  Single source of truth for the `signals-agent` rollout flag. Exports
+  `team_passes_rollout_flag(team)` — used by the Temporal coordinator activity and
+  the `sync_signals_agent_skills` management command to gate runtime fan-out and
+  canonical-skill push per team. Same flag key (`signals-agent`) is annotated on
+  every `signals-agent-*` MCP tool in `products/signals/mcp/tools.yaml`, where the
+  MCP server evaluates it per-user at session init. Flag eval fails closed so a
+  posthoganalytics outage can never silently let through non-enrolled teams. See
+  the "Rollout & feature flags" section in `../../ARCHITECTURE.md`.
 - `serializers.py`
   DRF serializers for the harness HTTP surface (runs, memory, project profile).
   Annotated for drf-spectacular so the generated MCP tools have informative schemas.

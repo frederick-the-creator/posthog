@@ -83,6 +83,27 @@ def _stub_canonical_sync(request):
         yield
 
 
+@pytest.fixture(autouse=True)
+def _stub_rollout_flag(request):
+    """Default the per-team rollout flag to ON for every test in this module.
+
+    The flag gate is exercised explicitly in `test_rollout_flag_off_skips_team` and
+    `test_rollout_flag_decides_per_team`. Every other test in this module asserts on
+    sampling / fan-out / dispatch logic that pre-dates the flag gate — defaulting the
+    flag to OFF would invalidate every assertion below. Tests that need flag-OFF
+    semantics opt in via `@pytest.mark.rollout_flag_off` or patch
+    `team_passes_rollout_flag` themselves.
+    """
+    if request.node.get_closest_marker("rollout_flag_off") or request.node.get_closest_marker("rollout_flag_explicit"):
+        yield
+        return
+    with patch(
+        "products.signals.backend.temporal.agentic.agent_coordinator.team_passes_rollout_flag",
+        return_value=True,
+    ):
+        yield
+
+
 @pytest.mark.asyncio
 @pytest.mark.django_db
 async def test_disabled_config_is_skipped(ateam):
@@ -94,6 +115,53 @@ async def test_disabled_config_is_skipped(ateam):
     output = await env.run(fetch_enabled_signals_agent_runs_activity, FetchEnabledRunsInput())
 
     assert output.planned_runs == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db
+@pytest.mark.rollout_flag_explicit
+async def test_rollout_flag_off_skips_team(ateam):
+    """`enabled=True` alone is not enough: a team that fails the rollout flag gate is
+    skipped without contributing planned runs. This is the dynamic dial that lets us
+    narrow the rollout via the flag dashboard rather than DB writes."""
+    await database_sync_to_async(SignalAgentConfig.objects.create)(team=ateam, enabled=True, enabled_skill_names=None)
+    await database_sync_to_async(_create_skill)(ateam, "signals-agent-errors")
+
+    with patch(
+        "products.signals.backend.temporal.agentic.agent_coordinator.team_passes_rollout_flag",
+        return_value=False,
+    ):
+        env = ActivityEnvironment()
+        output = await env.run(fetch_enabled_signals_agent_runs_activity, FetchEnabledRunsInput())
+
+    assert output.planned_runs == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db
+@pytest.mark.rollout_flag_explicit
+async def test_rollout_flag_decides_per_team(ateam, aother_team):
+    """The flag is evaluated per-team, not per-tick. A flag-on team contributes runs
+    in the same tick where a flag-off team contributes none."""
+    await database_sync_to_async(SignalAgentConfig.objects.create)(team=ateam, enabled=True, enabled_skill_names=None)
+    await database_sync_to_async(SignalAgentConfig.objects.create)(
+        team=aother_team, enabled=True, enabled_skill_names=None
+    )
+    await database_sync_to_async(_create_skill)(ateam, "signals-agent-errors")
+    await database_sync_to_async(_create_skill)(aother_team, "signals-agent-errors")
+
+    # Flag passes for `ateam`, fails for `aother_team`.
+    def _per_team_flag(team):
+        return team.id == ateam.id
+
+    with patch(
+        "products.signals.backend.temporal.agentic.agent_coordinator.team_passes_rollout_flag",
+        side_effect=_per_team_flag,
+    ):
+        env = ActivityEnvironment()
+        output = await env.run(fetch_enabled_signals_agent_runs_activity, FetchEnabledRunsInput())
+
+    assert [p.team_id for p in output.planned_runs] == [ateam.id]
 
 
 @pytest.mark.asyncio

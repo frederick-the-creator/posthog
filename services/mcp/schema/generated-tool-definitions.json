@@ -4365,7 +4365,8 @@
             "idempotentHint": true,
             "openWorldHint": true,
             "readOnlyHint": false
-        }
+        },
+        "feature_flag": "signals-agent"
     },
     "signals-agent-memory-delete": {
         "description": "Delete an `agent_inference` memory entry by key. Returns `deleted=false` if no row matched — the call is idempotent. Cannot delete `human_confirmed` entries.",
@@ -4380,7 +4381,8 @@
             "idempotentHint": true,
             "openWorldHint": true,
             "readOnlyHint": false
-        }
+        },
+        "feature_flag": "signals-agent"
     },
     "signals-agent-memory-list": {
         "description": "Return `SignalMemory` entries the project has accumulated — known issues, false positives, team steering. ILIKE matches on `content`; tags filter via Postgres array overlap (pass repeated `tags=` query params). Expired `agent_inference` entries are hidden by default; pass `include_expired=true` for audit/debug.",
@@ -4395,7 +4397,8 @@
             "idempotentHint": true,
             "openWorldHint": true,
             "readOnlyHint": true
-        }
+        },
+        "feature_flag": "signals-agent"
     },
     "signals-agent-project-profile-get": {
         "description": "Return a deterministic snapshot of \"what's true about this project\" — products in use, product intents (stuck onboardings), connected integrations, warehouse sources, signal source configs (split enabled/disabled), and existing inbox report counts. Singleton per team; the response reflects either the newest non-expired cached profile or a freshly-built one. Read this once at the start of a run (right after `llma-skill-get`) to orient on the team in one tool call instead of paginating through `inbox-source-configs-list` / `inbox-reports-list` / `read-data-schema` / `activity-log-list`. Distinct from `signals-agent-memory-list`: profile is ground truth from authoritative tables; memory is the agent's inferred learnings.",
@@ -4410,7 +4413,8 @@
             "idempotentHint": true,
             "openWorldHint": true,
             "readOnlyHint": true
-        }
+        },
+        "feature_flag": "signals-agent"
     },
     "signals-agent-runs-findings-create": {
         "description": "Persist a finding to `SignalAgentRun.findings` and fire `emit_signal` with `source_product = signals_agent`. Idempotent on `(run_id, finding_id)` — a second call with the same `finding_id` short-circuits without re-firing the pipeline. Honors the team's `shadow_mode` flag: when true, the finding is persisted on the run row but the external emit is a no-op. Use `weight` to rank, `confidence` to self-grade, and attach evidence citations referencing `error_tracking`, `session_replay`, `logs`, `feature_flags`, etc.",
@@ -4425,7 +4429,8 @@
             "idempotentHint": true,
             "openWorldHint": true,
             "readOnlyHint": false
-        }
+        },
+        "feature_flag": "signals-agent"
     },
     "signals-agent-runs-list": {
         "description": "Return recent `SignalAgentRun` summaries for the current project, newest first. Used by the headless Signals agent to dedupe its own work — read what other runs already covered before generating new hypotheses. ILIKE matches on `summary`; results are capped at 100 (default 20). Optional `since` window narrows to recent runs only.",
@@ -4440,7 +4445,8 @@
             "idempotentHint": true,
             "openWorldHint": true,
             "readOnlyHint": true
-        }
+        },
+        "feature_flag": "signals-agent"
     },
     "signals-agent-runs-retrieve": {
         "description": "Return the full `SignalAgentRun` row including `summary`, `findings`, `hypotheses_considered`, `tool_call_log`, and `metadata`. Strictly team-scoped — a UUID belonging to another project returns 404. Follow up to a row surfaced by `signals-agent-runs-list` when you need the full payload.",
@@ -4455,7 +4461,8 @@
             "idempotentHint": true,
             "openWorldHint": true,
             "readOnlyHint": true
-        }
+        },
+        "feature_flag": "signals-agent"
     },
     "sql-variables-create": {
         "description": "Create a reusable SQL variable for HogQL queries. Provide a human-readable name and type. The code_name is generated from the name and is referenced in SQL as {variables.code_name}. For List variables, provide values as the allowed options.",

@@ -35,10 +35,29 @@ def _fake_canonical(name: str, body: str = "# canonical body\n") -> CanonicalSki
 
 
 class TestSyncSignalsAgentSkillsCommand(BaseTest):
+    def setUp(self) -> None:
+        super().setUp()
+        # Default the rollout flag ON for every test that doesn't explicitly exercise
+        # the gate. The flag-off and --force paths are covered in the dedicated tests
+        # at the bottom of this module; everything above asserts on argument plumbing
+        # / sync output and shouldn't be coupled to flag-eval state.
+        self._rollout_flag_patcher = patch(
+            "products.signals.backend.management.commands.sync_signals_agent_skills.team_passes_rollout_flag",
+            return_value=True,
+        )
+        self._rollout_flag_patcher.start()
+        self.addCleanup(self._rollout_flag_patcher.stop)
+
     def _patch_canonicals(self, canonicals):
         return patch(
             "products.signals.backend.agent_harness.lazy_seed.discover_canonical_skills",
             return_value=canonicals,
+        )
+
+    def _patch_rollout_flag(self, *, enabled: bool):
+        return patch(
+            "products.signals.backend.management.commands.sync_signals_agent_skills.team_passes_rollout_flag",
+            return_value=enabled,
         )
 
     def test_requires_team_id_or_all_enabled(self) -> None:
@@ -113,3 +132,74 @@ class TestSyncSignalsAgentSkillsCommand(BaseTest):
 
         output = out.getvalue()
         assert "no changes" in output
+
+    def test_rollout_flag_off_skips_team_without_force(self) -> None:
+        canonical = _fake_canonical("signals-agent-alpha")
+        out = StringIO()
+        # Stop the autouse default-on patcher and replace with a flag-off patch.
+        self._rollout_flag_patcher.stop()
+        try:
+            with self._patch_rollout_flag(enabled=False), self._patch_canonicals((canonical,)):
+                call_command("sync_signals_agent_skills", "--team-id", str(self.team.id), stdout=out)
+        finally:
+            # Restart the autouse patch for tearDown's addCleanup contract; the original
+            # registered cleanup is stop(), and stop() is idempotent on already-stopped.
+            self._rollout_flag_patcher.start()
+
+        # Nothing persisted, and the per-team gated-skip line is in the output.
+        assert not LLMSkill.objects.filter(team=self.team, name="signals-agent-alpha").exists()
+        output = out.getvalue()
+        assert f"team {self.team.id}: skipped — gated by signals-agent rollout flag" in output
+        assert "All matched teams are gated off" in output
+
+    def test_rollout_flag_off_with_force_bypasses_gate(self) -> None:
+        canonical = _fake_canonical("signals-agent-alpha")
+        out = StringIO()
+        self._rollout_flag_patcher.stop()
+        try:
+            with self._patch_rollout_flag(enabled=False), self._patch_canonicals((canonical,)):
+                call_command(
+                    "sync_signals_agent_skills",
+                    "--team-id",
+                    str(self.team.id),
+                    "--force",
+                    stdout=out,
+                )
+        finally:
+            self._rollout_flag_patcher.start()
+
+        # --force bypasses the gate: canonical lands and the gated-skip line is absent.
+        assert LLMSkill.objects.filter(team=self.team, name="signals-agent-alpha").exists()
+        output = out.getvalue()
+        assert "gated by signals-agent rollout flag" not in output
+        assert "+created" in output
+
+    def test_all_enabled_filters_to_flag_passing_teams(self) -> None:
+        # Two teams enabled in config; flag passes only on `self.team`. The flag-off team
+        # is reported as gated-skip and is not synced; the flag-on team is.
+        from posthog.models import Team
+
+        flagged_off_team = Team.objects.create(organization=self.organization, name="FlaggedOffTeam")
+        SignalAgentConfig.objects.create(team=self.team, enabled=True)
+        SignalAgentConfig.objects.create(team=flagged_off_team, enabled=True)
+
+        canonical = _fake_canonical("signals-agent-alpha")
+        out = StringIO()
+        self._rollout_flag_patcher.stop()
+        try:
+            with (
+                patch(
+                    "products.signals.backend.management.commands.sync_signals_agent_skills.team_passes_rollout_flag",
+                    side_effect=lambda team: team.id == self.team.id,
+                ),
+                self._patch_canonicals((canonical,)),
+            ):
+                call_command("sync_signals_agent_skills", "--all-enabled", stdout=out)
+        finally:
+            self._rollout_flag_patcher.start()
+
+        assert LLMSkill.objects.filter(team=self.team, name="signals-agent-alpha").exists()
+        assert not LLMSkill.objects.filter(team=flagged_off_team, name="signals-agent-alpha").exists()
+        output = out.getvalue()
+        assert f"team {flagged_off_team.id}: skipped — gated by signals-agent rollout flag" in output
+        assert "Synced 1 team" in output

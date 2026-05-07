@@ -15,6 +15,7 @@ from posthog.sync import database_sync_to_async
 from posthog.temporal.common.heartbeat import Heartbeater
 
 from products.llm_analytics.backend.models.skills import LLMSkill
+from products.signals.backend.agent_harness.feature_flags import team_passes_rollout_flag
 from products.signals.backend.agent_harness.lazy_seed import sync_canonical_skills
 from products.signals.backend.agent_harness.skill_loader import SIGNALS_AGENT_SKILL_PREFIX
 from products.signals.backend.models import SignalAgentConfig
@@ -85,13 +86,23 @@ async def fetch_enabled_signals_agent_runs_activity(
 
 def _collect_planned_runs() -> list[PlannedRun]:
     """Sync DB scan. Runs in a worker thread via Django's per-thread connection mgmt."""
-    # TODO(phase 4): gate behind the `signals-agent-dogfood` feature flag once it
-    # exists. For now the `enabled=False` default on `SignalAgentConfig` is the gate.
     configs = list(SignalAgentConfig.objects.filter(enabled=True).select_related("team").order_by("team__id"))
     planned: list[PlannedRun] = []
     for config in configs:
         team = config.team
         team_id = team.id
+        # Per-team rollout gate (`signals-agent` feature flag). Layered above the static
+        # `enabled=True` filter above: a team must be both flagged and configured-enabled
+        # to contribute runs. This lets us narrow the rollout via the flag dashboard
+        # without DB writes — single-team allowlist on the flag is faster + safer than
+        # UPDATEing every `SignalAgentConfig` row, and a flag flip-off cleanly drains
+        # within one tick. Eval failure fails closed (see `feature_flags.py`).
+        if not team_passes_rollout_flag(team):
+            logger.info(
+                "signals_agent coordinator: team gated by rollout flag",
+                team_id=team_id,
+            )
+            continue
         # Sync canonical signals-agent-* skills before we resolve the skill list.
         # Without this, a brand-new team with `enabled_skill_names=None` and zero
         # LLMSkill rows would produce an empty planned set, no child runs would fan

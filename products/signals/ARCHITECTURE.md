@@ -291,7 +291,7 @@ Defined in `backend/temporal/agentic/agent_coordinator.py`.
 
 **Flow:**
 
-1. Activity `fetch_enabled_signals_agent_runs_activity` scans every enabled `SignalAgentConfig` and, for each team, calls `sync_canonical_skills(team)` to mirror the on-disk `signals-agent-*` skills onto the team's `LLMSkill` rows. Failures here are logged and the tick continues — a stale skill is preferable to a dead tick.
+1. Activity `fetch_enabled_signals_agent_runs_activity` scans every enabled `SignalAgentConfig`. Each team is then run through the `signals-agent` rollout flag (`agent_harness/feature_flags.team_passes_rollout_flag`); flag-off teams are logged and skipped without contributing planned runs. For each remaining team, the activity calls `sync_canonical_skills(team)` to mirror the on-disk `signals-agent-*` skills onto the team's `LLMSkill` rows. Failures here are logged and the tick continues — a stale skill is preferable to a dead tick.
 2. For each team, the coordinator builds the candidate skill set (either `enabled_skill_names` intersected with available skills, or all `signals-agent-*` skills the team has) and samples `min(config.runs_per_tick, len(candidates))` skills uniformly at random _without replacement_.
 3. Planned runs are sorted by `(team_id, skill_name)` and truncated at `MAX_RUNS_PER_TICK` (50 per tick, defense in depth against config explosions).
 4. Each `PlannedRun` becomes a child `RunSignalsAgentWorkflow` started with `ParentClosePolicy.ABANDON` and a deterministic workflow ID per `(team_id, skill_name, tick_id)` so retried coordinators can't double-launch within a tick.
@@ -784,7 +784,7 @@ The harness exposes three viewsets routed under `environment_signals_agent_*` ba
 - **`SignalMemoryViewSet`** — list / create / delete `SignalMemory` rows for the team. The `signals-agent-memory-list` tool is the agent's primary "what do I already know" read at prompt-assembly time.
 - **`SignalProjectProfileViewSet`** — `GET .../current/` returns the freshest non-expired `SignalProjectProfile` row for the team (recomputes if the cache is stale).
 
-Generated MCP tool names:
+Generated MCP tool names (all gated by the `signals-agent` rollout flag — see "Rollout & feature flags" below):
 
 | Tool                                 | Purpose                                                                        |
 | ------------------------------------ | ------------------------------------------------------------------------------ |
@@ -795,6 +795,22 @@ Generated MCP tool names:
 | `signals-agent-memory-create`        | Create or update a memory entry                                                |
 | `signals-agent-memory-delete`        | Remove a memory entry                                                          |
 | `signals-agent-project-profile-get`  | Read the current `SignalProjectProfile` snapshot                               |
+
+#### Rollout & feature flags
+
+The headless agent's rollout surface is gated by a single PostHog feature flag, **`signals-agent`**, evaluated in two contexts:
+
+1. **Runtime (per-team).** `agent_harness/feature_flags.team_passes_rollout_flag(team)` is invoked by:
+   - `agent_coordinator._collect_planned_runs` — flag-off teams are dropped from the per-tick fan-out before `sync_canonical_skills` runs, so a flag flip-off cleanly drains within one tick (no new runs scheduled, no canonical skill writes to non-flagged teams).
+   - The `sync_signals_agent_skills` management command — same gate; pass `--force` to bypass for emergency reverts (e.g. pushing a fixed canonical to every team regardless of rollout state).
+
+   Flag eval uses `groups={"organization": ..., "project": ...}` with `only_evaluate_locally=True`, so the gate doesn't add an HTTP roundtrip on the hot path. Eval failures fail closed (return `False`) — a momentary PostHog-flags outage will never silently let through teams the operator hasn't enrolled.
+
+2. **MCP tool surface (per-user).** Each of the seven `signals-agent-*` MCP tools declares `feature_flag: signals-agent` in `products/signals/mcp/tools.yaml`. The MCP server (`services/mcp/src/lib/analytics.ts:resolveToolFeatureFlags`) batch-evaluates the flag at session init on the requesting user's distinct_id and filters the tool out of the surface unless the flag evaluates true for that user. Targeting is user-property based (e.g. internal-user property).
+
+The flag sits **above** the existing static gates on `SignalAgentConfig` (`enabled`, `shadow_mode`). A team must be both flagged and configured-enabled to contribute runs; the flag is the dynamic dial, the config is the per-team master switch + emit posture. The Temporal schedule itself is _not_ flag-gated — when no team passes the flag, the coordinator activity returns 0 planned runs and exits in seconds; no defense-in-depth bootstrap-time switch is needed.
+
+A single flag covers both contexts because the dashboard rollout strategy composes naturally on one key (project-group condition OR user-property condition). Splitting into per-gate flags adds dashboards without buying real flexibility — if a single gate needs to lag during rollout, that's a flag-condition tweak, not a separate flag.
 
 ### Serializers (`backend/serializers.py`)
 
