@@ -18,6 +18,20 @@ from typing import Any
 DEFAULT_MAX_RUNTIME_S = 30 * 60  # 30 minutes — must match `MAX_POLL_SECONDS` in the sandbox runner.
 DEFAULT_MAX_FINDINGS = 5
 
+# Slack added on top of `DEFAULT_MAX_RUNTIME_S` for the Temporal activity
+# `start_to_close_timeout`, so heartbeat-based failures get a chance to surface
+# before Temporal's own timeout fires.
+ACTIVITY_SLACK_S = 60
+
+# Hard ceiling on how long a single agent activity can actually be running. The
+# workflow always sets `start_to_close_timeout = DEFAULT_MAX_RUNTIME_S + ACTIVITY_SLACK_S`
+# regardless of any per-team `max_runtime_s` override (the override only affects the
+# harness's in-activity poll loop, not the Temporal-enforced timeout). The stale-RUNNING
+# self-heal in `runner.py` uses this — not the team's recorded budget — as the staleness
+# base, so a team with a generous `max_runtime_s` doesn't get hours of false-blocking
+# from an orphaned row.
+WORKFLOW_HARD_CEILING_S = DEFAULT_MAX_RUNTIME_S + ACTIVITY_SLACK_S
+
 
 @dataclass(frozen=True)
 class RunLimits:
