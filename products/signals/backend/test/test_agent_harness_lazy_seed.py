@@ -64,34 +64,25 @@ class TestDiscoverCanonicalSkills:
         skills = discover_canonical_skills(tmp_path)
         assert [s.name for s in skills] == ["signals-agent-foo"]
 
-    def test_parses_allowed_tools_underscore_form(self, tmp_path: Path) -> None:
-        # Backwards-compat form. The spec uses `allowed-tools`; we accept this too.
+    @pytest.mark.parametrize(
+        "frontmatter_key",
+        [
+            # Backwards-compat form. Predates the agentskills.io spec alignment in this
+            # codebase and is still in use by other PHS skills.
+            "allowed_tools",
+            # Spec form per agentskills.io — preferred for new canonical skills.
+            "allowed-tools",
+        ],
+    )
+    def test_parses_allowed_tools_in_either_frontmatter_form(self, tmp_path: Path, frontmatter_key: str) -> None:
         _write_canonical_skill(
             tmp_path,
             dir_name="signals-agent-bar",
-            frontmatter="""
+            frontmatter=f"""
                 ---
                 name: signals-agent-bar
                 description: bar skill
-                allowed_tools:
-                  - remember
-                  - search_memory
-                ---
-            """,
-            body="# Bar\n",
-        )
-        skills = discover_canonical_skills(tmp_path)
-        assert skills[0].allowed_tools == ("remember", "search_memory")
-
-    def test_parses_allowed_tools_hyphen_form_per_agentskills_spec(self, tmp_path: Path) -> None:
-        _write_canonical_skill(
-            tmp_path,
-            dir_name="signals-agent-bar",
-            frontmatter="""
-                ---
-                name: signals-agent-bar
-                description: bar skill
-                allowed-tools:
+                {frontmatter_key}:
                   - remember
                   - search_memory
                 ---
@@ -120,7 +111,11 @@ class TestDiscoverCanonicalSkills:
         with pytest.raises(CanonicalSkillParseError, match="both 'allowed-tools' and 'allowed_tools'"):
             discover_canonical_skills(tmp_path)
 
-    def test_parses_bundled_files_under_references_scripts_and_assets(self, tmp_path: Path) -> None:
+    def test_parses_bundled_files_under_allowed_subdirs(self, tmp_path: Path) -> None:
+        # `_ALLOWED_BUNDLE_SUBDIRS` is kept in lockstep with `hogli build:skills` —
+        # `references/` and `scripts/` only. `assets/` and any other subdir are intentionally
+        # ignored: silently bundling them here while the AI plugin build skips them would
+        # produce different runtime behavior from the same source skill.
         _write_canonical_skill(
             tmp_path,
             dir_name="signals-agent-bar",
@@ -135,6 +130,7 @@ class TestDiscoverCanonicalSkills:
                 "references/playbook.md": "# Playbook\n",
                 "scripts/check.py": "print('hi')\n",
                 "assets/template.txt": "hello {{name}}\n",
+                "extras/notes.txt": "ignored\n",
             },
         )
         skills = discover_canonical_skills(tmp_path)
@@ -142,8 +138,9 @@ class TestDiscoverCanonicalSkills:
         assert "references/playbook.md" in files_by_path
         assert files_by_path["references/playbook.md"].content == "# Playbook\n"
         assert "scripts/check.py" in files_by_path
-        assert "assets/template.txt" in files_by_path
-        assert files_by_path["assets/template.txt"].content == "hello {{name}}\n"
+        # Files outside the allowlist must not leak in — guards the consumer divergence.
+        assert "assets/template.txt" not in files_by_path
+        assert "extras/notes.txt" not in files_by_path
 
     def test_missing_frontmatter_raises(self, tmp_path: Path) -> None:
         skill_dir = tmp_path / "signals-agent-foo"
