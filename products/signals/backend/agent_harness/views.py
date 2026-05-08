@@ -39,6 +39,7 @@ from products.signals.backend.agent_harness.serializers import (
     ForgetRequestSerializer,
     ForgetResponseSerializer,
     MemoryEntrySerializer,
+    ProjectProfileQuerySerializer,
     ProjectProfileSerializer,
     RememberRequestSerializer,
     SearchMemoryQuerySerializer,
@@ -355,8 +356,9 @@ class SignalProjectProfileViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSe
     queryset = SignalProjectProfile.objects.all()
     pagination_class = None
 
-    @extend_schema(
+    @validated_request(
         operation_id="signals_agent_project_profile_get",
+        query_serializer=ProjectProfileQuerySerializer,
         responses={
             200: OpenApiResponse(
                 response=ProjectProfileSerializer,
@@ -365,10 +367,13 @@ class SignalProjectProfileViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSe
         },
         summary="Get the current project profile",
         description=(
-            "Return the team's deterministic project profile. The response always reflects "
-            "either the newest non-expired cached row or a freshly-built one (lazy compute "
-            "on cache miss). Read this at the start of a run to orient on the team's product "
-            "mix, integrations, warehouse sources, signal coverage, and existing inbox surface."
+            "Return the team's deterministic project profile. By default the response reflects "
+            "either the newest non-expired cached row or a freshly-built one (lazy compute on "
+            "cache miss). Pass `force_refresh=true` to skip the cache and rebuild from "
+            "authoritative sources — useful right after seeding events or importing data so the "
+            "next agent run sees the change without waiting for natural TTL expiry. Read this at "
+            "the start of a run to orient on the team's product mix, integrations, warehouse "
+            "sources, signal coverage, and existing inbox surface."
         ),
     )
     @action(
@@ -387,5 +392,7 @@ class SignalProjectProfileViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSe
         required_scopes=["signal_agent:read"],
     )
     def current(self, request: Request, *args, **kwargs) -> Response:
-        profile = get_project_profile(team_id=self.team_id)
+        validated = getattr(request, "validated_query_data", {}) or {}
+        force_refresh = bool(validated.get("force_refresh", False))
+        profile = get_project_profile(team_id=self.team_id, force_refresh=force_refresh)
         return Response(ProjectProfileSerializer(profile.as_dict()).data)
