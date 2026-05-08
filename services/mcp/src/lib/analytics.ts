@@ -67,8 +67,21 @@ export async function isFeatureFlagEnabled(flagKey: string, distinctId: string):
     try {
         const client = getPostHogClient()
         const result = await client.isFeatureEnabled(flagKey, distinctId)
-        return result === true
-    } catch {
+        if (typeof result === 'boolean') {
+            return result
+        }
+        // posthog-node returns `undefined` when it can't decide — most often locally,
+        // when the analytics client is disabled (no `POSTHOG_ANALYTICS_API_KEY` /
+        // `_HOST`) or when remote `/decide` failed (capture flake, network blip).
+        // Fail closed so operators retain explicit-enroll semantics, but warn so a
+        // tool that goes missing from the catalog has a discoverable cause instead
+        // of a silent `catch {}` further upstream.
+        console.warn(
+            `[MCP] Feature flag "${flagKey}" eval was inconclusive (SDK returned ${String(result)}); treating as disabled.`
+        )
+        return false
+    } catch (err) {
+        console.warn(`[MCP] Feature flag "${flagKey}" eval threw; treating as disabled.`, err)
         return false
     }
 }
