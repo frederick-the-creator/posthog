@@ -37,6 +37,9 @@ agent-enabled team's `LLMSkill` rows by `agent_harness/lazy_seed.py` — see
   (issue spikes, regressions, suppression-rule churn).
 - `signals-agent-revenue-analytics/` — anomaly watcher for revenue
   (MRR / churn / segment shifts).
+- `signals-agent-surveys/` — hybrid anomaly + theme-aggregation watcher for
+  surveys (NPS / CSAT / rating regressions, response-rate drops, abandonment
+  spikes, targeting drift, plus clustered themes from open-text responses).
 - `signals-agent-observability-gaps/` — the odd one out. Watches for _structural
   gaps_ between events being captured and existing insight / dashboard / alert
   coverage, and emits P3 _recommendations_ rather than P0–P2 _anomalies_.
