@@ -17,3 +17,8 @@ export const counterHogFunctionStateOnEvent = new Counter({
     help: 'Metric the state of a hog function that matched an event',
     labelNames: ['state', 'kind'],
 })
+
+export const counterHogflowMatcherBytecodeError = new Counter({
+    name: 'cdp_hogflow_matcher_bytecode_error',
+    help: 'A wait_until_condition or conversion-goal filter threw during evaluation. Filter is treated as non-matching, so the workflow falls through to its timeout branch.',
+})
