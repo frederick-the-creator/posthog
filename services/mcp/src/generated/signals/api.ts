@@ -104,14 +104,25 @@ export const SignalsAgentMemoryDeleteBody = /* @__PURE__ */ zod
     .describe('Request body for `forget`. Only `agent_inference` keys can be deleted.')
 
 /**
- * Return the team's deterministic project profile. The response always reflects either the newest non-expired cached row or a freshly-built one (lazy compute on cache miss). Read this at the start of a run to orient on the team's product mix, integrations, warehouse sources, signal coverage, and existing inbox surface.
+ * Return the team's deterministic project profile. By default the response reflects either the newest non-expired cached row or a freshly-built one (lazy compute on cache miss). Pass `force_refresh=true` to skip the cache and rebuild from authoritative sources — useful right after seeding events or importing data so the next agent run sees the change without waiting for natural TTL expiry. Read this at the start of a run to orient on the team's product mix, integrations, warehouse sources, signal coverage, and existing inbox surface.
  * @summary Get the current project profile
  */
-export const SignalsAgentHarnessProjectProfileGetParams = /* @__PURE__ */ zod.object({
+export const SignalsAgentProjectProfileGetParams = /* @__PURE__ */ zod.object({
     project_id: zod
         .string()
         .describe(
             "Project ID of the project you're trying to access. To find the ID of the project, make a call to /api/projects/."
+        ),
+})
+
+export const signalsAgentProjectProfileGetQueryForceRefreshDefault = false
+
+export const SignalsAgentProjectProfileGetQueryParams = /* @__PURE__ */ zod.object({
+    force_refresh: zod
+        .boolean()
+        .default(signalsAgentProjectProfileGetQueryForceRefreshDefault)
+        .describe(
+            "When true, skip the cache and rebuild the profile from authoritative sources before responding. Use after seeding events, importing data, or any other change the caller knows just landed but hasn't surfaced through natural cache expiry yet. Concurrent forced rebuilds are still serialized by the team-keyed advisory lock — at most one extra `build_inventory` per simultaneous request."
         ),
 })
 
