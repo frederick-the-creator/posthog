@@ -24,7 +24,7 @@ export const SignalsAgentMemoryCreateBody = /* @__PURE__ */ zod
             .max(signalsAgentMemoryCreateBodyKeyMax)
             .describe('Agent-chosen semantic key. Re-using a key updates the existing entry in place.'),
         content: zod.string().describe('Prose to write. Read verbatim into future prompts.'),
-        tags: zod.array(zod.string()).optional().describe('Tags for later search. Empty/whitespace tags are dropped.'),
+        tags: zod.array(zod.string()).optional().describe('Tags for later search. Empty\/whitespace tags are dropped.'),
         ttl_days: zod
             .number()
             .min(1)
@@ -105,11 +105,14 @@ export const SignalsAgentRunsFindingsCreateBody = /* @__PURE__ */ zod
             .optional()
             .describe('Optional keys for downstream dedupe (e.g. `error_tracking_issue:<id>`).'),
         time_range: zod
-            .object({
-                date_from: zod.string().describe("ISO-8601 inclusive lower bound for the finding's window."),
-                date_to: zod.string().describe("ISO-8601 inclusive upper bound for the finding's window."),
-            })
-            .nullish()
+            .union([
+                zod.object({
+                    date_from: zod.string().describe("ISO-8601 inclusive lower bound for the finding's window."),
+                    date_to: zod.string().describe("ISO-8601 inclusive upper bound for the finding's window."),
+                }),
+                zod.null(),
+            ])
+            .optional()
             .describe('Optional time window the finding refers to.'),
         mcp_trace_id: zod.string().nullish().describe('Optional MCP trace id for cross-system debugging.'),
         finding_id: zod
@@ -123,7 +126,9 @@ export const SignalsAgentRunsFindingsCreateBody = /* @__PURE__ */ zod
  * View and control signal processing pipeline state for a team.
  */
 export const SignalsProcessingPauseUpdateBody = /* @__PURE__ */ zod.object({
-    timestamp: zod.iso.datetime({}).describe('Pause the grouping pipeline until this timestamp (ISO 8601).'),
+    timestamp: zod.iso
+        .datetime({ offset: true })
+        .describe('Pause the grouping pipeline until this timestamp (ISO 8601).'),
 })
 
 export const SignalsSourceConfigsCreateBody = /* @__PURE__ */ zod.object({
@@ -139,7 +144,7 @@ export const SignalsSourceConfigsCreateBody = /* @__PURE__ */ zod.object({
             'signals_agent',
         ])
         .describe(
-            '* `session_replay` - Session replay\n* `llm_analytics` - LLM analytics\n* `github` - GitHub\n* `linear` - Linear\n* `zendesk` - Zendesk\n* `conversations` - Conversations\n* `error_tracking` - Error tracking\n* `signals_agent` - Signals agent'
+            '\* `session_replay` - Session replay\n\* `llm_analytics` - LLM analytics\n\* `github` - GitHub\n\* `linear` - Linear\n\* `zendesk` - Zendesk\n\* `conversations` - Conversations\n\* `error_tracking` - Error tracking\n\* `signals_agent` - Signals agent'
         ),
     source_type: zod
         .enum([
@@ -153,7 +158,7 @@ export const SignalsSourceConfigsCreateBody = /* @__PURE__ */ zod.object({
             'cross_source_issue',
         ])
         .describe(
-            '* `session_analysis_cluster` - Session analysis cluster\n* `evaluation` - Evaluation\n* `issue` - Issue\n* `ticket` - Ticket\n* `issue_created` - Issue created\n* `issue_reopened` - Issue reopened\n* `issue_spiking` - Issue spiking\n* `cross_source_issue` - Cross source issue'
+            '\* `session_analysis_cluster` - Session analysis cluster\n\* `evaluation` - Evaluation\n\* `issue` - Issue\n\* `ticket` - Ticket\n\* `issue_created` - Issue created\n\* `issue_reopened` - Issue reopened\n\* `issue_spiking` - Issue spiking\n\* `cross_source_issue` - Cross source issue'
         ),
     enabled: zod.boolean().optional(),
     config: zod.unknown().optional(),
@@ -172,7 +177,7 @@ export const SignalsSourceConfigsUpdateBody = /* @__PURE__ */ zod.object({
             'signals_agent',
         ])
         .describe(
-            '* `session_replay` - Session replay\n* `llm_analytics` - LLM analytics\n* `github` - GitHub\n* `linear` - Linear\n* `zendesk` - Zendesk\n* `conversations` - Conversations\n* `error_tracking` - Error tracking\n* `signals_agent` - Signals agent'
+            '\* `session_replay` - Session replay\n\* `llm_analytics` - LLM analytics\n\* `github` - GitHub\n\* `linear` - Linear\n\* `zendesk` - Zendesk\n\* `conversations` - Conversations\n\* `error_tracking` - Error tracking\n\* `signals_agent` - Signals agent'
         ),
     source_type: zod
         .enum([
@@ -186,7 +191,7 @@ export const SignalsSourceConfigsUpdateBody = /* @__PURE__ */ zod.object({
             'cross_source_issue',
         ])
         .describe(
-            '* `session_analysis_cluster` - Session analysis cluster\n* `evaluation` - Evaluation\n* `issue` - Issue\n* `ticket` - Ticket\n* `issue_created` - Issue created\n* `issue_reopened` - Issue reopened\n* `issue_spiking` - Issue spiking\n* `cross_source_issue` - Cross source issue'
+            '\* `session_analysis_cluster` - Session analysis cluster\n\* `evaluation` - Evaluation\n\* `issue` - Issue\n\* `ticket` - Ticket\n\* `issue_created` - Issue created\n\* `issue_reopened` - Issue reopened\n\* `issue_spiking` - Issue spiking\n\* `cross_source_issue` - Cross source issue'
         ),
     enabled: zod.boolean().optional(),
     config: zod.unknown().optional(),
@@ -206,7 +211,7 @@ export const SignalsSourceConfigsPartialUpdateBody = /* @__PURE__ */ zod.object(
         ])
         .optional()
         .describe(
-            '* `session_replay` - Session replay\n* `llm_analytics` - LLM analytics\n* `github` - GitHub\n* `linear` - Linear\n* `zendesk` - Zendesk\n* `conversations` - Conversations\n* `error_tracking` - Error tracking\n* `signals_agent` - Signals agent'
+            '\* `session_replay` - Session replay\n\* `llm_analytics` - LLM analytics\n\* `github` - GitHub\n\* `linear` - Linear\n\* `zendesk` - Zendesk\n\* `conversations` - Conversations\n\* `error_tracking` - Error tracking\n\* `signals_agent` - Signals agent'
         ),
     source_type: zod
         .enum([
@@ -221,7 +226,7 @@ export const SignalsSourceConfigsPartialUpdateBody = /* @__PURE__ */ zod.object(
         ])
         .optional()
         .describe(
-            '* `session_analysis_cluster` - Session analysis cluster\n* `evaluation` - Evaluation\n* `issue` - Issue\n* `ticket` - Ticket\n* `issue_created` - Issue created\n* `issue_reopened` - Issue reopened\n* `issue_spiking` - Issue spiking\n* `cross_source_issue` - Cross source issue'
+            '\* `session_analysis_cluster` - Session analysis cluster\n\* `evaluation` - Evaluation\n\* `issue` - Issue\n\* `ticket` - Ticket\n\* `issue_created` - Issue created\n\* `issue_reopened` - Issue reopened\n\* `issue_spiking` - Issue spiking\n\* `cross_source_issue` - Cross source issue'
         ),
     enabled: zod.boolean().optional(),
     config: zod.unknown().optional(),
@@ -239,9 +244,9 @@ export const UsersSignalAutonomyCreateBody = /* @__PURE__ */ zod.object({
         .union([
             zod
                 .enum(['P0', 'P1', 'P2', 'P3', 'P4'])
-                .describe('* `P0` - P0\n* `P1` - P1\n* `P2` - P2\n* `P3` - P3\n* `P4` - P4'),
+                .describe('\* `P0` - P0\n\* `P1` - P1\n\* `P2` - P2\n\* `P3` - P3\n\* `P4` - P4'),
             zod.enum(['']),
-            zod.literal(null),
+            zod.null(),
         ])
-        .nullish(),
+        .optional(),
 })
