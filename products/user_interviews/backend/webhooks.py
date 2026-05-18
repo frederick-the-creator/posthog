@@ -327,7 +327,7 @@ def vapi_webhook(request: Request) -> Response:
             {"error": "Vapi webhook secret is not configured on this PostHog instance."},
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
-    provided = request.headers.get("x-vapi-signature") or request.headers.get("X-Vapi-Signature")
+    provided = request.headers.get("X-Vapi-Signature")
     # Pre-HMAC shape gate: Vapi's HMAC-SHA256 hex digest is exactly 64 hex chars. Anything
     # else can't possibly be a valid signature, so reject before we compute the HMAC over
     # the body — saves CPU and stops casual probes from filling diagnostic logs.
