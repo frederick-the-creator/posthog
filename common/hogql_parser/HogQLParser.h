@@ -315,7 +315,6 @@ public:
     ForInStmtContext *forInStmt();
     ForStmtContext *forStmt();
     FuncStmtContext *funcStmt();
-    VarAssignmentContext *varAssignment();
     BlockContext *block();
     ExprStmtContext *exprStmt();
     EmptyStmtContext *emptyStmt();
@@ -528,7 +527,9 @@ public:
   public:
     ExprStmtContext(antlr4::ParserRuleContext *parent, size_t invokingState);
     virtual size_t getRuleIndex() const override;
-    ExpressionContext *expression();
+    std::vector<ExpressionContext *> expression();
+    ExpressionContext* expression(size_t i);
+    antlr4::tree::TerminalNode *COLONEQUALS();
     antlr4::tree::TerminalNode *SEMICOLON();
 
 
