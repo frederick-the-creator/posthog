@@ -9,6 +9,7 @@ Two surfaces live here, both keyed on a SharingConfiguration access token:
   attributed to the topic creator. Signature-verified; idempotent on ``call.id``.
 """
 
+import re
 import hmac
 import json
 import string
@@ -23,7 +24,7 @@ from django.utils.timezone import now
 import structlog
 import posthoganalytics
 from rest_framework import status
-from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.decorators import api_view, authentication_classes, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -35,11 +36,37 @@ from posthog.constants import AvailableFeature
 from posthog.event_usage import groups
 from posthog.models.sharing_configuration import SharingConfiguration
 from posthog.models.team import Team
+from posthog.rate_limit import IPThrottle
 from posthog.storage.llm_prompt_cache import get_prompt_by_name_from_cache
 
 from .models import UserInterview, UserInterviewTopic
 
 logger = structlog.get_logger(__name__)
+
+
+class InterviewStartCallIPThrottle(IPThrottle):
+    """Per-IP cap on `start_call`. The endpoint is `AllowAny`, so without this any caller
+    can spin DB queries on share-token lookups indefinitely. 60/min comfortably handles
+    legitimate interviewees clicking Start (one share token can't dial multiple times in
+    the same minute), and any single IP burst above that is almost certainly probing."""
+
+    scope = "user_interviews_start_call_ip"
+    rate = "60/minute"
+
+
+class VapiWebhookIPThrottle(IPThrottle):
+    """Per-IP cap on `vapi_webhook`. Vapi calls us a small handful of times per interview
+    (status-update + end-of-call-report), so 120/min is well above legitimate volume even
+    if Vapi shards across multiple egress IPs. Stops unauthenticated callers from filling
+    structured logs or burning CPU on HMAC verification."""
+
+    scope = "user_interviews_vapi_webhook_ip"
+    rate = "120/minute"
+
+
+# Vapi's HMAC-SHA256 hex digest is exactly 64 lowercase hex chars; reject other shapes
+# pre-HMAC so casual probes can't drive log/CPU load.
+_VAPI_SIGNATURE_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 _EMBEDDING_MODELS = [m.value for m in EmbeddingModelName]
@@ -197,6 +224,7 @@ def _build_first_message(
 @api_view(["POST"])
 @authentication_classes([])
 @permission_classes([AllowAny])
+@throttle_classes([InterviewStartCallIPThrottle])
 def start_call(request: Request, access_token: str) -> Response:
     """Return the Vapi credentials + assistant overrides for a public interview share.
 
@@ -281,6 +309,7 @@ def start_call(request: Request, access_token: str) -> Response:
 @api_view(["POST"])
 @authentication_classes([])
 @permission_classes([AllowAny])
+@throttle_classes([VapiWebhookIPThrottle])
 def vapi_webhook(request: Request) -> Response:
     """Receive a Vapi ``end-of-call-report`` and persist it as a UserInterview.
 
@@ -299,6 +328,16 @@ def vapi_webhook(request: Request) -> Response:
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     provided = request.headers.get("x-vapi-signature") or request.headers.get("X-Vapi-Signature")
+    # Pre-HMAC shape gate: Vapi's HMAC-SHA256 hex digest is exactly 64 hex chars. Anything
+    # else can't possibly be a valid signature, so reject before we compute the HMAC over
+    # the body — saves CPU and stops casual probes from filling diagnostic logs.
+    if not provided or not _VAPI_SIGNATURE_RE.match(provided):
+        logger.warning(
+            "user_interviews_vapi_webhook_malformed_signature",
+            has_provided_signature=bool(provided),
+            provided_length=len(provided) if provided else 0,
+        )
+        return Response({"error": "invalid signature"}, status=status.HTTP_401_UNAUTHORIZED)
     expected = (
         hmac.new(settings.VAPI_WEBHOOK_SECRET.encode(), request.body, hashlib.sha256).hexdigest() if provided else None
     )

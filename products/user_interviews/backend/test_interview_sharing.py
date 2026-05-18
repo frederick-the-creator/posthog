@@ -632,8 +632,33 @@ class TestVapiWebhook(APIBaseTest):
             "/api/user_interviews/vapi_webhook/",
             data=self._end_of_call_payload(share.access_token),
             content_type="application/json",
-            HTTP_X_VAPI_SIGNATURE="wrong",
+            HTTP_X_VAPI_SIGNATURE="a" * 64,  # right shape, wrong value
         )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    @parameterized.expand(
+        [
+            ("missing", None),
+            ("empty", ""),
+            ("too_short", "abc"),
+            ("too_long", "a" * 65),
+            ("non_hex", "g" * 64),
+            ("sha256_prefix", f"sha256={'a' * 64}"),
+        ]
+    )
+    @override_settings(VAPI_WEBHOOK_SECRET="topsecret")
+    def test_webhook_rejects_malformed_signature_shape(self, _label: str, sig: str | None):
+        # Pre-HMAC shape gate — anything that's not exactly 64 hex chars is rejected
+        # before we compute the HMAC over the body, so casual probes can't drive CPU
+        # or log volume.
+        share = self._create_share()
+        self.client.logout()
+        url = "/api/user_interviews/vapi_webhook/"
+        body = self._end_of_call_payload(share.access_token)
+        if sig is None:
+            response = self.client.post(url, data=body, content_type="application/json")
+        else:
+            response = self.client.post(url, data=body, content_type="application/json", HTTP_X_VAPI_SIGNATURE=sig)
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     @override_settings(VAPI_WEBHOOK_SECRET="topsecret")
