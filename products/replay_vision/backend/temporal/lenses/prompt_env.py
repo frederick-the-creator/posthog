@@ -1,17 +1,4 @@
-"""Jinja2 environment for lens prompts.
-
-Autoescape is on, but uses a custom escape that replaces `<` with `<` (JSON-style
-Unicode escape) instead of the HTML `&lt;` jinja2 defaults to. The threat being mitigated
-is user content forging delimiter tags (`</events>`, `</lens_intent>`, …); the escape
-form is chosen to read naturally in an LLM prompt rather than as HTML entities.
-
-Jinja2 doesn't expose a public escape-function override, so we route through `finalize`
-(called on every `{{ var }}` value) and return `Markup` so jinja2's HTML autoescape is
-bypassed in favor of ours.
-
-Templates live in `prompts/`. Each lens type has its own `<lens_type>.jinja` extending
-`base.jinja` and filling the `task` block.
-"""
+"""Jinja2 environment for lens prompts: templates under `prompts/`, custom escape that uses `<` instead of HTML's `&lt;`."""
 
 from typing import Any
 
@@ -23,6 +10,7 @@ def _prompt_escape(value: Any) -> Markup:
     """Escape `<` so user content can't forge a delimiter tag inside the prompt."""
     if isinstance(value, Markup):
         # Already escaped (e.g. `tojson` output) — skip the full-string copy + replace.
+        # Foot-gun: `{{ var | safe }}` and direct `Markup` inputs bypass this check too; avoid both in templates.
         return value
     return Markup(str(value).replace("<", "\\u003c"))
 

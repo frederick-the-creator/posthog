@@ -121,6 +121,7 @@ class SessionMetadata(BaseModel, frozen=True):
     mouse_activity_count: int | None = None
     start_url: str | None = None
     console_error_count: int | None = None
+    events_truncated: bool = False
 
     def as_prompt_dict(self) -> dict[str, Any]:
         """Drop unset (None) fields so the prompt isn't padded with `null`s."""

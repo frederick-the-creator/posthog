@@ -20,10 +20,7 @@ class BaseLensOutput(BaseModel, frozen=True):
     )
 
     def to_event_properties(self) -> dict[str, Any]:
-        """Flatten with `lens_output_*` keys for the `$recording_observed` event.
-
-        `lens_type` is excluded because it's already a top-level event property via the snapshot.
-        """
+        """Flatten with `lens_output_*` keys for the event; `lens_type` is excluded (already a top-level property via the snapshot)."""
         return {f"lens_output_{k}": v for k, v in self.model_dump(mode="json", exclude={"lens_type"}).items()}
 
 

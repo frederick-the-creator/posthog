@@ -390,7 +390,7 @@ class TestFetchSessionEventsActivity:
         lens = await sync_to_async(_make_lens)()
         observation_id = uuid.uuid4()
         start = dt.datetime(2026, 5, 12, 10, 0, 0, tzinfo=dt.UTC)
-        metadata = {"start_time": start, "end_time": start, "duration": 0, "active_seconds": 0}
+        metadata = {"start_time": start, "end_time": start, "duration": 60, "active_seconds": 30}
         page_size = 3000
 
         full_page_rows = [("$pageview", start, f"sess-{i}") for i in range(page_size)]
@@ -517,7 +517,7 @@ class TestFetchSessionEventsActivity:
         lens = await sync_to_async(_make_lens)()
         observation_id = uuid.uuid4()
         start = dt.datetime(2026, 5, 12, 10, 0, 0, tzinfo=dt.UTC)
-        metadata = {"start_time": start, "end_time": start, "duration": 0, "active_seconds": 0}
+        metadata = {"start_time": start, "end_time": start, "duration": 60, "active_seconds": 30}
         mock_obj = self._make_session_replay_events_mock(metadata, [(["event"], [("$pageview",)])])
 
         with patch(
@@ -539,7 +539,7 @@ class TestFetchSessionEventsActivity:
         lens = await sync_to_async(_make_lens)()
         observation_id = uuid.uuid4()
         start = dt.datetime(2026, 5, 12, 10, 0, 0, tzinfo=dt.UTC)
-        metadata = {"start_time": start, "end_time": start, "duration": 0, "active_seconds": 0}
+        metadata = {"start_time": start, "end_time": start, "duration": 60, "active_seconds": 30}
         long_url = "https://app.example.com/very/long/path?with=querystring&that=repeats"
         win = "01931abc-1234-7890-abcd-ef0123456789"
         mock_obj = self._make_session_replay_events_mock(
@@ -582,7 +582,7 @@ class TestFetchSessionEventsActivity:
         lens = await sync_to_async(_make_lens)()
         observation_id = uuid.uuid4()
         start = dt.datetime(2026, 5, 12, 10, 0, 0, tzinfo=dt.UTC)
-        metadata = {"start_time": start, "end_time": start, "duration": 0, "active_seconds": 0}
+        metadata = {"start_time": start, "end_time": start, "duration": 60, "active_seconds": 30}
         mock_obj = self._make_session_replay_events_mock(
             metadata,
             [
@@ -614,6 +614,7 @@ class TestFetchSessionEventsActivity:
 
     @pytest.mark.asyncio
     async def test_session_metadata_round_trips_to_payload(self) -> None:
+        # `RecordingMetadata` uses `first_url` (not `start_url`) and has no `inactive_seconds` — we derive it from duration.
         lens = await sync_to_async(_make_lens)()
         observation_id = uuid.uuid4()
         start = dt.datetime(2026, 5, 12, 10, 0, 0, tzinfo=dt.UTC)
@@ -622,11 +623,10 @@ class TestFetchSessionEventsActivity:
             "end_time": start,
             "duration": 240,
             "active_seconds": 180,
-            "inactive_seconds": 60,
             "click_count": 23,
             "keypress_count": 41,
             "mouse_activity_count": 156,
-            "start_url": "https://app.example.com/dashboard",
+            "first_url": "https://app.example.com/dashboard",
             "console_error_count": 3,
         }
         mock_obj = self._make_session_replay_events_mock(metadata, [(["event"], [("$pageview",)])])
@@ -645,9 +645,163 @@ class TestFetchSessionEventsActivity:
         assert stored is not None
         m = stored.metadata
         assert m.active_seconds == 180
+        assert m.inactive_seconds == 60  # derived: duration (240) − active (180)
         assert m.click_count == 23
         assert m.start_url == "https://app.example.com/dashboard"
         assert m.console_error_count == 3
+        assert m.events_truncated is False
+
+    @pytest.mark.asyncio
+    async def test_marks_events_truncated_when_last_page_is_full(self) -> None:
+        lens = await sync_to_async(_make_lens)()
+        observation_id = uuid.uuid4()
+        start = dt.datetime(2026, 5, 12, 10, 0, 0, tzinfo=dt.UTC)
+        metadata = {"start_time": start, "end_time": start, "duration": 60, "active_seconds": 30}
+        # Every page returns a full batch so the loop hits `_MAX_EVENT_PAGES` with more events available.
+        full_page = [("$pageview", start, f"sess-{i}") for i in range(3000)]
+        mock_obj = self._make_session_replay_events_mock(
+            metadata,
+            [(["event", "timestamp", "$session_id"], full_page)] * 10,
+        )
+
+        with patch(
+            "products.replay_vision.backend.temporal.activities.fetch_session_events.SessionReplayEvents",
+            return_value=mock_obj,
+        ):
+            await fetch_session_events_activity(
+                FetchSessionEventsInputs(observation_id=observation_id, team_id=lens.team_id, session_id="sess-1")
+            )
+
+        redis_client = get_async_client(settings.REPLAY_VISION_REDIS_URL)
+        key = generate_state_key(label=StateActivitiesEnum.SESSION_EVENTS, state_id=str(observation_id))
+        stored = await get_data_class_from_redis(redis_client, key, target_class=LensLlmInputs)
+        assert stored is not None
+        assert stored.metadata.events_truncated is True
+
+    @pytest.mark.asyncio
+    async def test_raises_non_retryable_when_session_duration_below_min(self) -> None:
+        lens = await sync_to_async(_make_lens)()
+        observation_id = uuid.uuid4()
+        start = dt.datetime(2026, 5, 12, 10, 0, 0, tzinfo=dt.UTC)
+        # 5s is under the 15s minimum.
+        metadata = {"start_time": start, "end_time": start, "duration": 5, "active_seconds": 3}
+        mock_obj = self._make_session_replay_events_mock(metadata, [(["event"], [("$pageview",)])])
+
+        with patch(
+            "products.replay_vision.backend.temporal.activities.fetch_session_events.SessionReplayEvents",
+            return_value=mock_obj,
+        ):
+            with pytest.raises(ApplicationError) as exc_info:
+                await fetch_session_events_activity(
+                    FetchSessionEventsInputs(observation_id=observation_id, team_id=lens.team_id, session_id="sess-1")
+                )
+            assert exc_info.value.non_retryable is True
+            assert "5" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_raises_non_retryable_when_active_seconds_below_min(self) -> None:
+        lens = await sync_to_async(_make_lens)()
+        observation_id = uuid.uuid4()
+        start = dt.datetime(2026, 5, 12, 10, 0, 0, tzinfo=dt.UTC)
+        # 60s duration passes; 3s active is under the 10s minimum.
+        metadata = {"start_time": start, "end_time": start, "duration": 60, "active_seconds": 3}
+        mock_obj = self._make_session_replay_events_mock(metadata, [(["event"], [("$pageview",)])])
+
+        with patch(
+            "products.replay_vision.backend.temporal.activities.fetch_session_events.SessionReplayEvents",
+            return_value=mock_obj,
+        ):
+            with pytest.raises(ApplicationError) as exc_info:
+                await fetch_session_events_activity(
+                    FetchSessionEventsInputs(observation_id=observation_id, team_id=lens.team_id, session_id="sess-1")
+                )
+            assert exc_info.value.non_retryable is True
+            assert "3" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_filters_low_context_exceptions_and_keeps_signal(self) -> None:
+        lens = await sync_to_async(_make_lens)()
+        observation_id = uuid.uuid4()
+        start = dt.datetime(2026, 5, 12, 10, 0, 0, tzinfo=dt.UTC)
+        metadata = {"start_time": start, "end_time": start, "duration": 60, "active_seconds": 30}
+        columns = [
+            "event",
+            "$exception_values",
+            "$exception_fingerprint_record",
+            "$exception_functions",
+            "$exception_sources",
+        ]
+        rows = [
+            # Dropped: no keyword, <5 fingerprints.
+            ("$exception", ["TypeError"], [{"x": 1}], ["renderRow"], ["app.js"]),
+            # Kept: 5+ fingerprints suggests a blocking error.
+            ("$exception", ["NullPtr"], [{}, {}, {}, {}, {}], ["renderRow"], ["app.js"]),
+            # Kept: keyword match in values.
+            ("$exception", ["fetch failed"], [], ["handler"], ["bundle.js"]),
+            # Kept: not an exception.
+            ("$pageview", None, None, None, None),
+        ]
+        mock_obj = self._make_session_replay_events_mock(metadata, [(columns, rows)])
+
+        with patch(
+            "products.replay_vision.backend.temporal.activities.fetch_session_events.SessionReplayEvents",
+            return_value=mock_obj,
+        ):
+            await fetch_session_events_activity(
+                FetchSessionEventsInputs(observation_id=observation_id, team_id=lens.team_id, session_id="sess-1")
+            )
+
+        redis_client = get_async_client(settings.REPLAY_VISION_REDIS_URL)
+        key = generate_state_key(label=StateActivitiesEnum.SESSION_EVENTS, state_id=str(observation_id))
+        stored = await get_data_class_from_redis(redis_client, key, target_class=LensLlmInputs)
+        assert stored is not None
+        # Filter-only columns are projected out before the prompt.
+        assert "$exception_fingerprint_record" not in stored.events.columns
+        assert "$exception_functions" not in stored.events.columns
+        assert "$exception_sources" not in stored.events.columns
+        # Three kept rows: high-fingerprint, keyword-match, non-exception.
+        kept_events = [row[stored.events.columns.index("event")] for row in stored.events.rows]
+        assert kept_events == ["$exception", "$exception", "$pageview"]
+
+    @pytest.mark.asyncio
+    async def test_filters_context_less_autocapture_only(self) -> None:
+        lens = await sync_to_async(_make_lens)()
+        observation_id = uuid.uuid4()
+        start = dt.datetime(2026, 5, 12, 10, 0, 0, tzinfo=dt.UTC)
+        metadata = {"start_time": start, "end_time": start, "duration": 60, "active_seconds": 30}
+        columns = [
+            "event",
+            "elements_chain_texts",
+            "elements_chain_elements",
+            "elements_chain_href",
+            "elements_chain_ids",
+        ]
+        rows = [
+            # Dropped: bare $autocapture with no element context.
+            ("$autocapture", [], [], None, []),
+            # Kept: $autocapture with element context.
+            ("$autocapture", ["Save"], ["button"], None, []),
+            # Kept: descriptive multi-token name.
+            ("button_click", [], [], None, []),
+            # Kept: other system event.
+            ("$pageview", [], [], None, []),
+        ]
+        mock_obj = self._make_session_replay_events_mock(metadata, [(columns, rows)])
+
+        with patch(
+            "products.replay_vision.backend.temporal.activities.fetch_session_events.SessionReplayEvents",
+            return_value=mock_obj,
+        ):
+            await fetch_session_events_activity(
+                FetchSessionEventsInputs(observation_id=observation_id, team_id=lens.team_id, session_id="sess-1")
+            )
+
+        redis_client = get_async_client(settings.REPLAY_VISION_REDIS_URL)
+        key = generate_state_key(label=StateActivitiesEnum.SESSION_EVENTS, state_id=str(observation_id))
+        stored = await get_data_class_from_redis(redis_client, key, target_class=LensLlmInputs)
+        assert stored is not None
+        kept = [row[stored.events.columns.index("event")] for row in stored.events.rows]
+        assert kept == ["$autocapture", "button_click", "$pageview"]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -920,3 +1074,45 @@ async def test_apply_lens_workflow_propagates_workflow_id_to_create() -> None:
     assert create_input.triggered_by == ObservationTrigger.SCHEDULE
     assert create_input.triggered_by_user_id == 42
     assert create_input.workflow_id == "wf-from-info"
+
+
+class TestEventIdCitationValidation:
+    """Pure-function checks on `_validate_event_id_citations` — no Gemini, no Temporal."""
+
+    def _output(self, reasoning: str) -> MonitorOutput:
+        return MonitorOutput(verdict=True, confidence=0.9, reasoning=reasoning)
+
+    def test_passes_when_no_event_ids_cited(self) -> None:
+        from products.replay_vision.backend.temporal.activities.call_lens_provider import _validate_event_id_citations
+
+        result = _validate_event_id_citations(self._output("The user clicked the button."), {"abcdef0123456789"})
+        assert result is None
+
+    def test_passes_when_all_cited_ids_are_valid(self) -> None:
+        from products.replay_vision.backend.temporal.activities.call_lens_provider import _validate_event_id_citations
+
+        valid = {"abcdef0123456789", "0123456789abcdef"}
+        result = _validate_event_id_citations(self._output("See event abcdef0123456789 and 0123456789abcdef."), valid)
+        assert result is None
+
+    def test_passes_when_hallucinated_ratio_within_threshold(self) -> None:
+        from products.replay_vision.backend.temporal.activities.call_lens_provider import _validate_event_id_citations
+
+        # 10 cited, 1 hallucinated → 10% — under the 15% threshold.
+        valid = {f"{i:016x}" for i in range(10)}
+        cited_ids = [f"{i:016x}" for i in range(9)] + ["ffffffffffffffff"]
+        reasoning = " ".join(f"see {eid}" for eid in cited_ids)
+        result = _validate_event_id_citations(self._output(reasoning), valid)
+        assert result is None
+
+    def test_returns_error_when_hallucinated_ratio_exceeds_threshold(self) -> None:
+        from products.replay_vision.backend.temporal.activities.call_lens_provider import _validate_event_id_citations
+
+        # 4 cited, 1 valid, 3 hallucinated → 75%.
+        result = _validate_event_id_citations(
+            self._output("see abcdef0123456789, deadbeefdeadbeef, cafebabecafebabe, fadedfadedfadefa."),
+            {"abcdef0123456789"},
+        )
+        assert result is not None
+        assert "3/4" in result
+        assert "Cite only event_id values" in result

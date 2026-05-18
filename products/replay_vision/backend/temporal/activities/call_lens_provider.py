@@ -1,6 +1,8 @@
 """Single Gemini call per lens application; retries once on validation failure with the error fed back."""
 
+import re
 import asyncio
+from typing import Any
 from uuid import UUID
 
 from django.conf import settings
@@ -17,7 +19,7 @@ from posthog.models import Team
 
 from products.replay_vision.backend.models.replay_observation import ReplayObservation
 from products.replay_vision.backend.temporal.lenses import lens_from_snapshot
-from products.replay_vision.backend.temporal.lenses.base import BaseLens
+from products.replay_vision.backend.temporal.lenses.base import BaseLens, BaseLensOutput
 from products.replay_vision.backend.temporal.state import (
     StateActivitiesEnum,
     get_data_class_from_redis,
@@ -33,6 +35,11 @@ from products.replay_vision.backend.temporal.types import (
 logger = structlog.get_logger(__name__)
 
 _MAX_LLM_ATTEMPTS = 2  # one initial call + one re-prompt with the validation error appended
+
+# Matches the 16-char hex event_id emitted by `fetch_session_events._row_hash` (sha256[:16]).
+_EVENT_ID_HEX_RE = re.compile(r"\b[0-9a-f]{16}\b")
+# Allowable ratio of cited event_ids that don't appear in the input table before we reject the response.
+_HALLUCINATED_EVENT_IDS_MAX_RATIO = 0.15
 
 
 @activity.defn
@@ -57,8 +64,13 @@ async def call_lens_provider_activity(inputs: CallLensProviderInputs) -> LensCal
         types.Part(text=prompt_text),
     ]
 
+    valid_event_ids = {row[0] for row in llm_inputs.events.rows if isinstance(row[0], str)}
     finalized = await _call_with_retry(
-        lens=lens, model=snapshot.model.value, prompt_parts=prompt_parts, team_id=inputs.team_id
+        lens=lens,
+        model=snapshot.model.value,
+        prompt_parts=prompt_parts,
+        team_id=inputs.team_id,
+        valid_event_ids=valid_event_ids,
     )
     return LensCallOutput(model_output=finalized)
 
@@ -92,7 +104,14 @@ async def _load_llm_inputs(observation_id: UUID) -> LensLlmInputs:
     return payload
 
 
-async def _call_with_retry(*, lens: BaseLens, model: str, prompt_parts: list[types.Part], team_id: int) -> BaseModel:
+async def _call_with_retry(
+    *,
+    lens: BaseLens,
+    model: str,
+    prompt_parts: list[types.Part],
+    team_id: int,
+    valid_event_ids: set[str],
+) -> BaseModel:
     """One Gemini call, plus at most one retry that appends the validation error to the prompt."""
     client = genai.AsyncClient(api_key=settings.GEMINI_API_KEY)
     schema_class = lens.llm_response_schema
@@ -122,9 +141,13 @@ async def _call_with_retry(*, lens: BaseLens, model: str, prompt_parts: list[typ
             else:
                 finalized = lens.finalize(parsed)
                 semantic_error = lens.validate_semantics(finalized)
-                if semantic_error is None:
-                    return finalized
-                last_error = f"Semantic validation failed: {semantic_error}"
+                if semantic_error is not None:
+                    last_error = f"Semantic validation failed: {semantic_error}"
+                else:
+                    hallucination_error = _validate_event_id_citations(finalized, valid_event_ids)
+                    if hallucination_error is None:
+                        return finalized
+                    last_error = hallucination_error
 
         logger.warning(
             "replay_vision.call_lens_provider.invalid_response",
@@ -148,6 +171,41 @@ async def _call_with_retry(*, lens: BaseLens, model: str, prompt_parts: list[typ
         f"Lens call rejected after {_MAX_LLM_ATTEMPTS} attempts: {last_error}",
         non_retryable=True,
     )
+
+
+def _validate_event_id_citations(output: BaseLensOutput, valid_event_ids: set[str]) -> str | None:
+    """Return None when no citations or hallucination ratio ≤ threshold; otherwise an error string for the re-prompt."""
+    cited = _collect_event_id_tokens(output.model_dump(mode="json"))
+    if not cited:
+        return None  # No citations to check; we don't enforce a minimum.
+    hallucinated = cited - valid_event_ids
+    if not hallucinated:
+        return None
+    ratio = len(hallucinated) / len(cited)
+    if ratio <= _HALLUCINATED_EVENT_IDS_MAX_RATIO:
+        return None
+    examples = sorted(hallucinated)[:3]
+    return (
+        f"You cited {len(hallucinated)}/{len(cited)} event_id values that don't exist in the events table "
+        f"(examples: {examples}). Cite only event_id values that appear in the input."
+    )
+
+
+def _collect_event_id_tokens(value: Any) -> set[str]:
+    """Recursively scan a JSON-serializable structure for 16-char hex tokens matching the event_id shape."""
+    if isinstance(value, str):
+        return set(_EVENT_ID_HEX_RE.findall(value))
+    if isinstance(value, dict):
+        out: set[str] = set()
+        for v in value.values():
+            out.update(_collect_event_id_tokens(v))
+        return out
+    if isinstance(value, list):
+        out = set()
+        for v in value:
+            out.update(_collect_event_id_tokens(v))
+        return out
+    return set()
 
 
 __all__ = ["call_lens_provider_activity"]
